@@ -1,3 +1,11 @@
 # Large public data assets
 public_data/images/
 zipfiles/public_data.zip
+
+# Generated training/evaluation artifacts
+outputs/
+results/
+results_*/
+local_score/
+model/
+hw5_*.zip

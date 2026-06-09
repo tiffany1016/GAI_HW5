@@ -6,6 +6,11 @@ zipfiles/public_data.zip
 outputs/
 results/
 results_*/
+res/
 local_score/
+score_output*/
+score_input*/
+__pycache__/
+code/__pycache__/
 model/
 hw5_*.zip

@@ -54,11 +54,11 @@ def generate_and_save_images(
     os.makedirs(save_folder, exist_ok=True)
     to_pil = transforms.ToPILImage()
     generator = torch.Generator(device=device).manual_seed(seed)
-    scheduler.set_timesteps(num_inference_steps, device=device)
 
     sample_idx = 0
     total_batches = (num_samples + batch_size - 1) // batch_size
     for _ in tqdm(range(total_batches), desc="generating"):
+        scheduler.set_timesteps(num_inference_steps, device=device)
         current_batch = min(batch_size, num_samples - sample_idx)
         latents = torch.randn((current_batch, 4, 32, 32), generator=generator, device=device, dtype=dtype)
 

@@ -18,7 +18,7 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
-def build_scheduler(name: str, prediction_type: str):
+def build_scheduler(name: str, prediction_type: str, use_karras_sigmas: bool, solver_order: int):
     train_scheduler = DDPMScheduler(
         num_train_timesteps=1000,
         beta_start=0.00085,
@@ -30,7 +30,11 @@ def build_scheduler(name: str, prediction_type: str):
     if name == "ddim":
         return DDIMScheduler.from_config(train_scheduler.config)
     if name == "dpm":
-        return DPMSolverMultistepScheduler.from_config(train_scheduler.config)
+        return DPMSolverMultistepScheduler.from_config(
+            train_scheduler.config,
+            use_karras_sigmas=use_karras_sigmas,
+            solver_order=solver_order,
+        )
     if name == "ddpm":
         return DDPMScheduler.from_config(train_scheduler.config)
     raise ValueError(f"Unknown scheduler: {name}")
@@ -87,6 +91,8 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_inference_steps", type=int, default=80)
     parser.add_argument("--scheduler", choices=["dpm", "ddim", "ddpm"], default="dpm")
+    parser.add_argument("--use_karras_sigmas", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--solver_order", type=int, choices=[1, 2, 3], default=2)
     parser.add_argument("--prediction_type", choices=["epsilon", "v_prediction"], default="epsilon")
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--mixed_precision", choices=["fp16", "no"], default="fp16")
@@ -112,7 +118,7 @@ def main():
     if use_amp:
         unet.to(dtype=torch.float16)
 
-    scheduler = build_scheduler(args.scheduler, args.prediction_type)
+    scheduler = build_scheduler(args.scheduler, args.prediction_type, args.use_karras_sigmas, args.solver_order)
     generate_and_save_images(
         unet=unet,
         vae=vae,

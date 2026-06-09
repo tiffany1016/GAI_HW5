@@ -3,7 +3,7 @@ import json
 import math
 import os
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
 
@@ -38,6 +38,13 @@ PRESETS = {
     ),
     "base": ModelPreset(
         block_out_channels=(128, 256, 512, 512),
+        layers_per_block=2,
+        down_block_types=("DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "DownBlock2D"),
+        up_block_types=("UpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D"),
+        attention_head_dim=8,
+    ),
+    "large": ModelPreset(
+        block_out_channels=(192, 384, 512, 768),
         layers_per_block=2,
         down_block_types=("DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "DownBlock2D"),
         up_block_types=("UpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D"),
@@ -179,6 +186,13 @@ def build_lr_scheduler(optimizer, warmup_steps: int, total_steps: int, min_lr_ra
     return LambdaLR(optimizer, lr_lambda)
 
 
+def compute_snr(scheduler: DDPMScheduler, timesteps: torch.Tensor) -> torch.Tensor:
+    alphas_cumprod = scheduler.alphas_cumprod.to(device=timesteps.device)
+    sqrt_alpha_prod = alphas_cumprod[timesteps] ** 0.5
+    sqrt_one_minus_alpha_prod = (1.0 - alphas_cumprod[timesteps]) ** 0.5
+    return (sqrt_alpha_prod / sqrt_one_minus_alpha_prod) ** 2
+
+
 @torch.no_grad()
 def sample_images(
     unet: UNet2DModel,
@@ -239,6 +253,9 @@ def parse_args():
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--prediction_type", choices=["epsilon", "v_prediction"], default="epsilon")
+    parser.add_argument("--latent_mode", choices=["sample", "mode"], default="sample")
+    parser.add_argument("--snr_gamma", type=float, default=None)
+    parser.add_argument("--noise_offset", type=float, default=0.0)
     parser.add_argument("--mixed_precision", choices=["fp16", "no"], default="fp16")
     parser.add_argument("--use_ema", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--ema_decay", type=float, default=0.9999)
@@ -308,10 +325,20 @@ def main():
             pixel_values = pixel_values.to(device, non_blocking=True)
             with torch.no_grad():
                 with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
-                    latents = vae.encode(pixel_values).latent_dist.sample()
+                    latent_dist = vae.encode(pixel_values).latent_dist
+                    if args.latent_mode == "mode":
+                        latents = latent_dist.mode()
+                    else:
+                        latents = latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
 
             noise = torch.randn_like(latents)
+            if args.noise_offset > 0:
+                noise = noise + args.noise_offset * torch.randn(
+                    (latents.shape[0], latents.shape[1], 1, 1),
+                    device=latents.device,
+                    dtype=latents.dtype,
+                )
             timesteps = torch.randint(
                 0,
                 train_scheduler.config.num_train_timesteps,
@@ -326,7 +353,17 @@ def main():
 
             with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
                 model_pred = unet(noisy_latents, timesteps).sample
-                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
+                loss = loss.mean(dim=list(range(1, loss.ndim)))
+                if args.snr_gamma is not None:
+                    snr = compute_snr(train_scheduler, timesteps)
+                    min_snr = torch.minimum(snr, torch.full_like(snr, args.snr_gamma))
+                    if args.prediction_type == "v_prediction":
+                        loss_weight = min_snr / (snr + 1.0)
+                    else:
+                        loss_weight = min_snr / snr
+                    loss = loss * loss_weight
+                loss = loss.mean()
                 loss_for_backward = loss / args.gradient_accumulation_steps
 
             scaler.scale(loss_for_backward).backward()

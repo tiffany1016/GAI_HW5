@@ -18,12 +18,12 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
-def build_scheduler(name: str, prediction_type: str, use_karras_sigmas: bool, solver_order: int):
+def build_scheduler(name: str, prediction_type: str, beta_schedule: str, use_karras_sigmas: bool, solver_order: int):
     train_scheduler = DDPMScheduler(
         num_train_timesteps=1000,
         beta_start=0.00085,
         beta_end=0.012,
-        beta_schedule="scaled_linear",
+        beta_schedule=beta_schedule,
         clip_sample=False,
         prediction_type=prediction_type,
     )
@@ -94,6 +94,7 @@ def parse_args():
     parser.add_argument("--use_karras_sigmas", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--solver_order", type=int, choices=[1, 2, 3], default=2)
     parser.add_argument("--prediction_type", choices=["epsilon", "v_prediction"], default="epsilon")
+    parser.add_argument("--beta_schedule", choices=["scaled_linear", "squaredcos_cap_v2", "linear"], default="scaled_linear")
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--mixed_precision", choices=["fp16", "no"], default="fp16")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
@@ -118,7 +119,13 @@ def main():
     if use_amp:
         unet.to(dtype=torch.float16)
 
-    scheduler = build_scheduler(args.scheduler, args.prediction_type, args.use_karras_sigmas, args.solver_order)
+    scheduler = build_scheduler(
+        args.scheduler,
+        args.prediction_type,
+        args.beta_schedule,
+        args.use_karras_sigmas,
+        args.solver_order,
+    )
     generate_and_save_images(
         unet=unet,
         vae=vae,

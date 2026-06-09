@@ -154,12 +154,12 @@ def build_unet(preset_name: str) -> UNet2DModel:
     )
 
 
-def build_train_scheduler(prediction_type: str) -> DDPMScheduler:
+def build_train_scheduler(prediction_type: str, beta_schedule: str) -> DDPMScheduler:
     return DDPMScheduler(
         num_train_timesteps=1000,
         beta_start=0.00085,
         beta_end=0.012,
-        beta_schedule="scaled_linear",
+        beta_schedule=beta_schedule,
         clip_sample=False,
         prediction_type=prediction_type,
     )
@@ -241,6 +241,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train a latent DDPM UNet for HW5 FID optimization.")
     parser.add_argument("--image_dir", type=str, default="public_data/images")
     parser.add_argument("--output_dir", type=str, default="outputs/fid_base")
+    parser.add_argument("--init_unet", type=str, default=None)
     parser.add_argument("--preset", choices=sorted(PRESETS), default="base")
     parser.add_argument("--epochs", type=int, default=160)
     parser.add_argument("--max_train_steps", type=int, default=None)
@@ -253,6 +254,7 @@ def parse_args():
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--prediction_type", choices=["epsilon", "v_prediction"], default="epsilon")
+    parser.add_argument("--beta_schedule", choices=["scaled_linear", "squaredcos_cap_v2", "linear"], default="scaled_linear")
     parser.add_argument("--latent_mode", choices=["sample", "mode"], default="sample")
     parser.add_argument("--snr_gamma", type=float, default=None)
     parser.add_argument("--noise_offset", type=float, default=0.0)
@@ -300,10 +302,14 @@ def main():
     vae.requires_grad_(False)
     vae.eval()
 
-    unet = build_unet(args.preset).to(device)
+    if args.init_unet is not None:
+        print(f"Loading initial UNet from {args.init_unet}")
+        unet = UNet2DModel.from_pretrained(args.init_unet).to(device)
+    else:
+        unet = build_unet(args.preset).to(device)
     unet.train()
     optimizer = torch.optim.AdamW(unet.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=args.weight_decay)
-    train_scheduler = build_train_scheduler(args.prediction_type)
+    train_scheduler = build_train_scheduler(args.prediction_type, args.beta_schedule)
     total_update_steps = math.ceil(len(dataloader) / args.gradient_accumulation_steps) * args.epochs
     if args.max_train_steps is not None:
         total_update_steps = min(total_update_steps, args.max_train_steps)
